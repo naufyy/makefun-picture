@@ -350,6 +350,9 @@ def draw_body(cv):
         # Crisp baked rim just under the top edge.
         if t < 0.035:
             k *= 1.12
+        # Warm rim light on the shadow side so the silhouette separates
+        # from the dark backdrop, even at thumbnail size.
+        k += 0.55 * smooth(0.88, 0.995, nx) * (1.0 - 0.6 * t)
         return (SPONGE[0] * k, SPONGE[1] * k, SPONGE[2] * k, 1.0)
 
     cv.paint(poly_spans(pts), shade)
@@ -382,20 +385,23 @@ def draw_cracks(cv):
     angles = [0.25, 0.95, 1.75, 2.45, 2.95, 3.55, 4.1, 4.7, 5.25, 5.85]
     for a0 in angles:
         a = a0 + r.uniform(-0.12, 0.12)
-        rad = 0.66 + r.uniform(-0.04, 0.04)
-        end = r.uniform(0.86, 0.97)
+        rad = 0.70 + r.uniform(-0.03, 0.03)
+        end = r.uniform(0.93, 0.99)
         pts = []
         while rad < end:
             pts.append((CX + RX * rad * math.cos(a), TOPY + 8 + RY * rad
                         * math.sin(a)))
-            rad += r.uniform(0.035, 0.06)
-            a += r.uniform(-0.09, 0.09)
+            rad += r.uniform(0.06, 0.085)
+            a += r.uniform(-0.05, 0.05)
+        pts.append((CX + RX * end * math.cos(a), TOPY + 8 + RY * end
+                    * math.sin(a)))
         for i in range(len(pts) - 1):
             (x0, y0), (x1, y1) = pts[i], pts[i + 1]
             f = 1.0 - i / max(1, len(pts) - 1)
-            w = 1.2 + 3.0 * f
-            cv.line(x0 - 1.1, y0 - 1.1, x1 - 1.1, y1 - 1.1, w * 0.8,
-                    (168, 110, 72), 0.55)
+            w = 1.3 + 4.2 * f
+            # Lit lower lip of the fissure, then the dark split itself.
+            cv.line(x0 + 0.9, y0 + 1.3, x1 + 0.9, y1 + 1.3, w * 0.85,
+                    (184, 124, 82), 0.55)
             cv.line(x0, y0, x1, y1, w, CRACK)
 
 
@@ -410,39 +416,69 @@ def cap_wob(t):
 
 
 def draw_drips(cv):
-    drips = [(-176, 24, 70), (-128, 32, 150), (-80, 26, 92), (-30, 40, 246),
-             (24, 30, 122), (76, 36, 212), (124, 25, 84), (166, 29, 158)]
+    # (offset from centre, width, length); length None = runs into the pool.
+    drips = [(-176, 24, 78), (-128, 30, 158), (-80, 24, 96), (-30, 40, None),
+             (24, 28, 128), (76, 36, None), (124, 24, 90), (166, 30, None)]
     for off, w, length in drips:
         x = CX + off
         top = rim_y(x, TOPY) - 16
-        bot = top + length
         hw0 = w / 2
+        to_pool = length is None
+        if to_pool:
+            # Run down the side and spread into the sauce pool at the base.
+            bot = rim_y(x, BOTY) + 10
+            length = bot - top
+            bead = 0.0
+            bc = bot
+        else:
+            bot = top + length
+            bead = hw0 * 1.0           # teardrop bead hanging at the tip
+            bc = bot - bead
 
-        def hw(v, top=top, length=length, hw0=hw0):
+        def hw(v, top=top, length=length, hw0=hw0, to_pool=to_pool,
+               bead=bead, bc=bc):
             t = (v - top) / length
-            h = hw0 * (1.0 - 0.22 * t) * (1.0 + 0.10 * math.sin(v * 0.045 + hw0)
+            # Stem thins as the sauce runs down, with a gentle wobble.
+            h = hw0 * (1.0 - 0.42 * t) * (1.0 + 0.08 * math.sin(v * 0.045 + hw0)
                                           + 0.04 * math.sin(v * 0.09 + 1.3))
-            if t < 0.1:
+            if t < 0.1:                # fillet where it leaves the rim
                 h += hw0 * 0.9 * (1.0 - t / 0.1) ** 2
-            return h
+            if to_pool:
+                # Foot flares out where it meets the pool.
+                h += hw0 * 1.6 * smooth(0.82, 1.0, t) ** 2
+            else:
+                dv = v - bc
+                if 0.0 <= dv < bead:
+                    h = math.sqrt(bead * bead - dv * dv)   # round underside
+                elif dv * dv < bead * bead:
+                    c = math.sqrt(bead * bead - dv * dv)
+                    # Smooth max of stem and bead circle: no hard step.
+                    k = 4.0
+                    h = (h + c + math.sqrt((h - c) ** 2 + k * k)) * 0.5 \
+                        - k * 0.25
+                elif v > bc:
+                    h = 0.0
+            return max(h, 0.0)
 
-        bulb = hw0 * 1.12
         pts = []
-        steps = 40
+        steps = 90
         for i in range(steps + 1):
             v = top + (bot - top) * i / steps
             pts.append((x - hw(v), v))
-        for i in range(0, 25):
-            t = math.pi - math.pi * i / 24      # left, through the bottom, right
-            pts.append((x + bulb * math.cos(t), bot + bulb * math.sin(t)))
+        if to_pool:
+            for i in range(0, 13):     # shallow rounded foot
+                t = math.pi - math.pi * i / 12
+                pts.append((x + hw(bot) * math.cos(t),
+                            bot + 6.0 * math.sin(t)))
         for i in range(steps, -1, -1):
             v = top + (bot - top) * i / steps
             pts.append((x + hw(v), v))
 
-        def shade(px, py, x=x, top=top, bot=bot, hw=hw, bulb=bulb,
-                  length=length):
+        def shade(px, py, x=x, top=top, hw=hw, length=length):
             u, v = px / S, py / S
-            h = hw(v) if v <= bot else bulb
+            h = hw(v)
+            if h < 0.5:
+                h = 0.5
             s = (u - x) / h
             if s < -1.0:
                 s = -1.0
@@ -460,9 +496,14 @@ def draw_drips(cv):
             return (c[0], c[1], c[2], 1.0)
 
         cv.paint(poly_spans(pts), shade)
-        # Gleam on the bead at the end of the drip.
-        cv.soft_ellipse(x - bulb * 0.35, bot - bulb * 0.2, bulb * 0.32,
-                        bulb * 0.2, -0.6, WHITE, 0.8)
+        if to_pool:
+            # Glint where the drip merges into the pool.
+            cv.soft_ellipse(x - hw(bot) * 0.3, bot - 2, hw(bot) * 0.45, 3.0,
+                            0.0, GOLD, 0.5)
+        else:
+            # Gleam on the bead at the end of the drip.
+            cv.soft_ellipse(x - bead * 0.38, bc - bead * 0.3, bead * 0.34,
+                            bead * 0.22, -0.6, WHITE, 0.85)
 
 
 def draw_cap(cv):
